@@ -3,7 +3,11 @@
   "spooder_module": {
     "name": "discord",
     "type": "community",
-    "file": "discord.ts"
+    "file": "discord.ts",
+    "webui": {
+      "repoOwner": "GreySole",
+      "repoName": "Spooder-WebUI-Discord-Module"
+    }
   },
   "version": "0.6.0",
   "private": true,
