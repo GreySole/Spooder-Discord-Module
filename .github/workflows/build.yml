@@ -11,6 +11,8 @@ on:
   push:
     branches:
       - '**'
+    tags:
+      - 'v*.*.*'
   pull_request:
 
 permissions:
@@ -25,6 +27,7 @@ env:
 
 jobs:
   build:
+    if: github.ref_type == 'branch'
     runs-on: ubuntu-latest
     steps:
       - name: Check out this module
@@ -58,3 +61,66 @@ jobs:
       - name: Build
         working-directory: host
         run: npm run build
+
+  # Version tags only. Publishes the module's source as a release asset, because that is what
+  # Spooder installs: a module backend is TypeScript compiled by the build already on the
+  # user's machine, not a prebuilt bundle. Building here would produce nothing installable.
+  #
+  # The zip is uploaded rather than relying on GitHub's automatic source archive, and that is
+  # deliberate: an uploaded asset has stable bytes, so the registry can record a sha256 a
+  # reviewer checked. GitHub generates its tag archives on demand and does not guarantee they
+  # stay byte-identical, which would break every pinned hash at once.
+  build-and-release:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out this module
+        uses: actions/checkout@v4
+        with:
+          path: module
+
+      - name: Check out the Spooder host
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOST_REPO }}
+          ref: ${{ env.HOST_REF }}
+          path: host
+
+      - name: Graft this checkout into the host tree
+        run: |
+          rm -rf "host/$MODULE_PATH"
+          mkdir -p "host/$MODULE_PATH"
+          cp -a module/. "host/$MODULE_PATH/"
+          rm -rf "host/$MODULE_PATH/.git"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: host
+        run: npm install
+
+      # Never publish source that does not compile. This is the same build a user's machine
+      # will run when they install it, so a failure here is a failure there.
+      - name: Build
+        working-directory: host
+        run: npm run build
+
+      - name: Package the module source
+        run: |
+          cd module
+          rm -rf .git node_modules dist
+          zip -r "../spooder-discord-module-${{ github.ref_name }}.zip" .
+
+      - name: Create release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "spooder-discord-module-${{ github.ref_name }}.zip" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
