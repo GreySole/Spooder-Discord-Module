@@ -1,11 +1,18 @@
-import { ChannelType, Client, ComponentType, Events, Message, TextChannel } from 'discord.js';
+import {
+  ChannelType,
+  Client,
+  Events,
+  Message,
+  MessageComponentInteraction,
+  TextChannel,
+} from 'discord.js';
 import fs from 'fs';
 import { EventService } from '../../core/service/EventService';
 import ModuleService from '../../core/service/ModuleService';
 import { KeyedObject, StreamMessage, userDir } from '../../Types';
 import Discord, { discordLog } from './discord';
 import DiscordApi from './DiscordApi';
-import { DiscordButtonDef } from './DiscordButtons';
+import { DiscordComponentDef } from './DiscordButtons';
 import DiscordVoice from './DiscordVoice';
 
 export default class DiscordChat {
@@ -25,11 +32,12 @@ export default class DiscordChat {
     this.client = this.discordModule.client;
     this.client?.on(Events.InteractionCreate, async (interaction) => {
       //discordLog("DISCORD INTERACTION", interaction);
-      if (interaction.isButton()) {
-        // A button posted by a Send Interaction node is owned by that node's collector, which
-        // acknowledges it. Anything else is a leftover - a button from a previous run of the
-        // bot, or one whose node already timed out - and Discord shows the clicker "This
-        // interaction failed" if nobody answers within three seconds, so it is deferred here.
+      if (interaction.isMessageComponent()) {
+        // A button or select menu posted by a Send Interaction node is owned by that node's
+        // collector, which acknowledges it. Anything else is a leftover - a component from a
+        // previous run of the bot, or one whose node already timed out - and Discord shows the
+        // clicker "This interaction failed" if nobody answers within three seconds, so it is
+        // deferred here.
         if (!this.pendingInteractionMessages.has(interaction.message.id)) {
           interaction.deferUpdate().catch(() => {});
         }
@@ -217,12 +225,12 @@ export default class DiscordChat {
   // collector is about to handle; this is how it tells those apart.
   private pendingInteractionMessages = new Set<string>();
 
-  // Posts a message with buttons in a channel and resolves when one is clicked, or when the
-  // wait runs out.
+  // Posts a message with buttons and/or select menus in a channel and resolves when one is
+  // clicked/chosen, or when the wait runs out.
   async sendButtonPrompt(
     channelId: string,
     content: string,
-    buttons: DiscordButtonDef[],
+    components: DiscordComponentDef[],
     timeoutSeconds: number,
   ): Promise<KeyedObject> {
     if (!channelId) {
@@ -234,7 +242,7 @@ export default class DiscordChat {
       discordLog('Tried to send an interaction to a non-text channel', channelId);
       return { error: 'Not a text channel' };
     }
-    return this.promptOnChannel(channel as TextChannel, content, buttons, timeoutSeconds);
+    return this.promptOnChannel(channel as TextChannel, content, components, timeoutSeconds);
   }
 
   // The same prompt, in a DM. Discord has no "message a user" endpoint - a DM is a channel like
@@ -243,7 +251,7 @@ export default class DiscordChat {
   async sendDirectButtonPrompt(
     userId: string,
     content: string,
-    buttons: DiscordButtonDef[],
+    components: DiscordComponentDef[],
     timeoutSeconds: number,
   ): Promise<KeyedObject> {
     if (!userId) {
@@ -256,7 +264,7 @@ export default class DiscordChat {
       return await this.promptOnChannel(
         channel as unknown as TextChannel,
         content,
-        buttons,
+        components,
         timeoutSeconds,
       );
     } catch (error) {
@@ -268,44 +276,116 @@ export default class DiscordChat {
   }
 
   // The interaction has to be answered within three seconds or Discord marks it failed, so the
-  // click is acknowledged with an update that strips the buttons off - which doubles as making
-  // the prompt one-shot. A prompt left clickable after its graph moved on is the sharper edge
-  // of the two: the second click has nothing collecting it.
+  // click/selection is acknowledged with an update that strips the components off - which
+  // doubles as making the prompt one-shot. A prompt left interactive after its graph moved on
+  // is the sharper edge of the two: the second click has nothing collecting it.
   private async promptOnChannel(
     channel: TextChannel,
     content: string,
-    buttons: DiscordButtonDef[],
+    components: DiscordComponentDef[],
     timeoutSeconds: number,
   ): Promise<KeyedObject> {
-    if (buttons.length === 0) {
-      discordLog('An interaction node has no buttons to offer');
-      return { error: 'No buttons' };
+    if (components.length === 0) {
+      discordLog('An interaction node has no buttons or select menus plugged in');
+      return { error: 'No components' };
     }
 
-    const rows = this.discordModule.buttons.makeButtons(buttons);
+    const rows = this.discordModule.buttons.makeComponentRows(components);
     const message = await channel.send({ content, components: rows as any[] });
     this.pendingInteractionMessages.add(message.id);
 
     try {
-      const interaction = await message.awaitMessageComponent({
-        componentType: ComponentType.Button,
+      // A message with any button waits for one to be clicked: menus then only record what was
+      // picked (a confirm / cancel button ends it), so several menus can be filled in first. A
+      // message of menus alone has no such button, so its first pick is the answer.
+      const hasButtons = components.some((c) => c.kind === 'button');
+      const selections: { [slotId: string]: string[] } = {};
+
+      // No componentType filter: the message only ever carries components this node just built,
+      // so any interaction that lands on it - button or select menu - is one to collect here.
+      const collector = message.createMessageComponentCollector({
         time: Math.max(1, timeoutSeconds) * 1000,
       });
-      await interaction.update({ components: [] });
-      return {
+      const interaction = await new Promise<MessageComponentInteraction | null>((resolve) => {
+        collector.on('collect', (collected) => {
+          if (collected.isAnySelectMenu()) {
+            selections[collected.customId] = collected.values;
+            if (hasButtons) {
+              collected
+                .deferUpdate()
+                .catch((error) => discordLog('Could not acknowledge a pick', error));
+              return;
+            }
+          }
+          resolve(collected);
+          collector.stop('answered');
+        });
+        // A no-op once resolved above; only the wait running out gets here unanswered.
+        collector.on('end', () => resolve(null));
+      });
+      if (!interaction) {
+        throw Object.assign(new Error('Wait expired'), { code: 'InteractionCollectorError' });
+      }
+
+      await this.closePrompt(message, interaction);
+      // Every menu that was picked from, by slot, for the graph to read per menu.
+      const perMenu: KeyedObject = {};
+      for (const [slotId, picked] of Object.entries(selections)) {
+        perMenu[`${slotId}Values`] = picked;
+        perMenu[`${slotId}Value`] = picked[0] ?? '';
+      }
+      // Everything picked across all the menus, in the order they sit on the message rather
+      // than the order they were used, so the array reads the same however the user went.
+      const allPicked = Object.entries(selections)
+        .sort(([a], [b]) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')))
+        .flatMap(([, picked]) => picked);
+      const common = {
         messageId: message.id,
-        buttonId: interaction.customId,
-        buttonLabel: buttons.find((b) => b.id === interaction.customId)?.label ?? '',
+        values: allPicked,
+        value: allPicked[0] ?? '',
         userId: interaction.user.id,
         username: interaction.user.username,
+        ...perMenu,
       };
-    } catch {
-      // awaitMessageComponent rejects on expiry rather than resolving with nothing, so this is
-      // the timeout path and not an error worth logging as one.
-      await message.edit({ components: [] }).catch(() => {});
+      if (interaction.isAnySelectMenu()) {
+        return { ...common, selectMenuId: interaction.customId };
+      }
+      return {
+        ...common,
+        buttonId: interaction.customId,
+        buttonLabel: (() => {
+          const clicked = components.find((c) => c.id === interaction.customId);
+          return clicked?.kind === 'button' ? clicked.label : '';
+        })(),
+      };
+    } catch (error: any) {
+      // awaitMessageComponent rejects on expiry rather than resolving with nothing, so an
+      // InteractionCollectorError is the timeout path and not worth logging. Anything else -
+      // a failed acknowledgement, say - is a real fault that would otherwise pass for a timeout.
+      if (error?.code !== 'InteractionCollectorError') {
+        discordLog('Failed to handle an interaction on message ' + message.id, error);
+      }
+      await this.closePrompt(message).catch(() => {});
       return { messageId: message.id, timedOut: true };
     } finally {
       this.pendingInteractionMessages.delete(message.id);
+    }
+  }
+
+  // Takes the buttons and menus off a finished prompt, acknowledging the click if there was one.
+  // A prompt with no text has nothing left once they are gone, and Discord rejects editing a
+  // message down to empty (a 400 that would also leave the click unanswered), so it is deleted
+  // instead.
+  private async closePrompt(message: Message, interaction?: MessageComponentInteraction) {
+    if (message.content.trim() === '') {
+      await interaction?.deferUpdate();
+      await message.delete();
+      return;
+    }
+    if (interaction) {
+      await interaction.update({ components: [] });
+    } else {
+      await message.edit({ components: [] });
     }
   }
 

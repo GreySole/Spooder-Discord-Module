@@ -2,6 +2,7 @@
   "name": "@spooder/discord",
   "spooder_module": {
     "name": "discord",
+    "displayName": "Discord",
     "type": "community",
     "file": "discord.ts",
     "webui": {
@@ -9,7 +10,7 @@
       "repoName": "Spooder-WebUI-Discord-Module"
     }
   },
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
