@@ -334,15 +334,8 @@ export default class DiscordChat {
         perMenu[`${slotId}Values`] = picked;
         perMenu[`${slotId}Value`] = picked[0] ?? '';
       }
-      // Everything picked across all the menus, in the order they sit on the message rather
-      // than the order they were used, so the array reads the same however the user went.
-      const allPicked = Object.entries(selections)
-        .sort(([a], [b]) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')))
-        .flatMap(([, picked]) => picked);
       const common = {
         messageId: message.id,
-        values: allPicked,
-        value: allPicked[0] ?? '',
         userId: interaction.user.id,
         username: interaction.user.username,
         ...perMenu,

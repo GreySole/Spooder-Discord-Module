@@ -159,13 +159,8 @@ const INTERACTION_OUTPUTS: NodePortDef[] = [
   { id: 'buttonId', label: 'Button ID', dataType: 'string' },
   { id: 'buttonLabel', label: 'Button Label', dataType: 'string' },
   { id: 'selectMenuId', label: 'Select Menu ID', dataType: 'string' },
-  // Everything chosen across every select menu, in message order - a String Select's option
-  // values, or the picked users'/roles'/channels' ids as strings for the other four kinds. Each
-  // plugged-in menu also gets its own outputs, added by the editor.
-  { id: 'values', label: 'Selected Values', dataType: 'any' },
-  // The common case is a single menu with one pick - this is values[0], so a graph that doesn't
-  // care about multi-select doesn't have to unpack an array.
-  { id: 'value', label: 'Selected Value', dataType: 'string' },
+  // What each plugged-in select menu had picked is added per menu by the editor - see
+  // buildInteractionOutputs - so there is no single combined output to tell menus apart in.
   { id: 'userId', label: 'User ID', dataType: 'string' },
   { id: 'username', label: 'Username', dataType: 'string' },
   { id: 'messageId', label: 'Message ID', dataType: 'string' },
@@ -504,7 +499,7 @@ export default class Discord implements CommunityModuleInterface {
         id: 'discord_select_menu',
         label: 'Discord Select Menu',
         description:
-          'Defines one dropdown. Plug it into a Send Server Interaction or Send Direct Interaction node. A String Select offers the options you list; the other kinds are filled in by Discord from the server. What was picked comes out of the interaction node as Selected Value(s).',
+          'Defines one dropdown. Plug it into a Send Server Interaction or Send Direct Interaction node. A String Select offers the options you list; the other kinds are filled in by Discord from the server. What was picked comes out of the interaction node on outputs named after this menu.',
         category: 'discord',
         form: {
           type: {
