@@ -10,7 +10,7 @@
       "repoName": "Spooder-WebUI-Discord-Module"
     }
   },
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "dependencies": {
     "@discordjs/opus": "^0.10.0",

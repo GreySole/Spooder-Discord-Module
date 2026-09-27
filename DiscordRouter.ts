@@ -1,6 +1,7 @@
 import { Request, Response, Router } from 'express';
 import fs from 'fs';
 import ModuleService from '../../core/service/ModuleService';
+import { modSafeRouter } from '../../core/util/ModRouterUtil';
 import { userDir } from '../../Types';
 import Discord from './discord';
 
@@ -60,5 +61,8 @@ export default function getDiscordRouters() {
     baseUrl: '/discord',
     router,
     publicRouter,
+    // What the Discord node pickers read: the guilds and their roles. Not /config, which carries
+    // the bot token.
+    modRouter: modSafeRouter(router, ['GET /get_guilds', 'GET /get_roles']),
   };
 }
